@@ -136,6 +136,7 @@ html,body{max-width:100%;overflow-x:hidden}
     <h2>도감 파일 불러오기</h2>
     <p>휴대폰에 내려받아 둔 도감 PDF를 고르세요. 여러 권을 한 번에 골라도 됩니다. 구글 드라이브에서 바로 고르면 안 되고, 먼저 폰에 내려받은 파일을 골라야 합니다. 파일은 휴대폰 밖으로 나가지 않습니다.</p>
     <ul class="fl" id="flist"></ul>
+    <div id="guard" style="font-size:12.5px;line-height:1.6;color:var(--mut);margin:8px 2px"></div>
     <div class="btn" id="pick" style="position:relative;overflow:hidden">PDF 여러 개 한꺼번에 고르기<input id="fin" type="file" multiple style="position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:200px;cursor:pointer"></div>
     <button class="btn sub" id="savebtn" style="display:none">이 기기에 다시 보관하기</button><button class="btn sub" id="sclose">닫기</button>
     <div id="prog"></div>
@@ -367,11 +368,40 @@ function guessBook(name){
 }
 const saved=new Set();
 function withTimeout(p,ms){ return Promise.race([p,new Promise(r=>setTimeout(()=>r(null),ms))]); }
-async function opfsDir(){ try{ return await withTimeout((async()=>{ const r=await navigator.storage.getDirectory(); return await r.getDirectoryHandle('dogam',{create:true}); })(),2000); }catch(e){ return null; } }
+async function opfsDir(ms){ try{ return await withTimeout((async()=>{ const r=await navigator.storage.getDirectory(); return await r.getDirectoryHandle('dogam',{create:true}); })(),ms||20000); }catch(e){ return null; } }
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function getMarker(){ try{ return JSON.parse(localStorage.getItem('dogam_saved')||'null'); }catch(e){ return null; } }
+function setMarker(){ try{ localStorage.setItem('dogam_saved',JSON.stringify({ids:[...saved],t:Date.now()})); }catch(e){} }
+let loadNote='';
 async function loadSaved(){
-  const d=await opfsDir(); if(!d) return;
-  for(const b of PBOOKS){ try{ const h=await withTimeout(d.getFileHandle(b.id+'.pdf'),1500); if(!h) continue; const f=await h.getFile(); if(f.size>0 && (!b.size||f.size===b.size)){ saved.add(b.id); if(!files[b.id]) files[b.id]=f; } }catch(e){} }
-  renderFiles(); search();
+  $('#fbtn').textContent='보관된 도감 불러오는 중…';
+  const mk=getMarker();
+  let d=null; for(let i=0;i<3 && !d;i++){ d=await opfsDir(); if(!d) await sleep(1500); }
+  if(d){
+    for(let round=0; round<3; round++){
+      for(const b of PBOOKS){ if(saved.has(b.id)) continue;
+        try{ const h=await withTimeout(d.getFileHandle(b.id+'.pdf'),10000); if(!h) continue; const f=await withTimeout(h.getFile(),10000); if(f && f.size>0 && (!b.size||f.size===b.size)){ saved.add(b.id); if(!files[b.id]) files[b.id]=f; } }catch(e){} }
+      const want=(mk&&mk.ids||[]).filter(id=>BOOKS[id]&&!saved.has(id));
+      if(!want.length) break; await sleep(2000);
+    }
+  }
+  const miss=(mk&&mk.ids||[]).filter(id=>BOOKS[id]&&!saved.has(id));
+  if(!d) loadNote='기기 저장소를 열지 못했습니다. 앱을 닫았다가 다시 열어 보세요. 그래도 안 되면 휴대폰을 다시 시작해 보세요.';
+  else if(miss.length) loadNote=`보관했던 도감 ${miss.length}권(${miss.map(id=>BOOKS[id].short).join(', ')})을 찾지 못했습니다. 앱을 닫았다가 다시 열어 보고, 그래도 없으면 그 도감만 다시 골라 주세요.`;
+  else if(!mk && !saved.size){ try{ if(localStorage.getItem('dogam_ever')) loadNote='이 기기에 보관했던 도감과 앱 기록이 모두 지워졌습니다. 크롬이나 정리 앱이 이 사이트의 데이터를 삭제한 것으로 보입니다. 아래 「저장 보호」 안내를 확인한 뒤 도감을 다시 골라 주세요.'; }catch(e){} }
+  if(saved.size) setMarker();
+  renderFiles(); search(); await showGuard();
+  if(loadNote){ $('#prog').innerHTML='<b style="color:#b0563a">'+esc(loadNote)+'</b>'; $('#sheet').classList.add('open'); }
+}
+async function showGuard(){
+  let p=null, est=null;
+  try{ if(navigator.storage && navigator.storage.persist){ p=await withTimeout(navigator.storage.persisted(),3000); if(!p) p=await withTimeout(navigator.storage.persist(),3000); } }catch(e){}
+  try{ est=await withTimeout(navigator.storage.estimate(),3000); }catch(e){}
+  const g=document.getElementById('guard'); if(!g) return;
+  const gb=x=>(x/1073741824).toFixed(1);
+  g.innerHTML = (p? '<span class="ok">저장 보호: 켜짐</span> — 크롬이 보관한 도감을 임의로 지우지 않습니다.'
+    : '<span class="no">저장 보호: 꺼짐</span> — 휴대폰 공간이 부족하면 크롬이 보관한 도감을 지울 수 있습니다. 크롬 ⋮ → <b>앱 설치</b>로 설치한 아이콘으로 열면 켜질 수 있습니다.')
+    + (est&&est.quota? `<br>사용 ${gb(est.usage||0)}GB / 한도 ${gb(est.quota)}GB`:'');
 }
 function renderFiles(){
   $('#flist').innerHTML = PBOOKS.map(b=>`<li><span>${esc(b.title)}${files[b.id]?`<br><small style="color:var(--mut)">${esc(files[b.id].name||'')} · ${(files[b.id].size/1048576|0)}MB</small>`:''}</span><span>${files[b.id]?(saved.has(b.id)?'<span class="ok">✓ 보관됨</span>':'<span class="ok">✓ 이번만</span>'):'<span class="no">없음</span>'} <span class="chip" style="position:relative;overflow:hidden;display:inline-block">고르기<input type="file" data-one="${b.id}" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:100px"></span></span></li>`).join('');
@@ -398,7 +428,7 @@ async function saveLater0(list){
   const need=list.reduce((a,[,f])=>a+f.size,0);
   try{ const est=await withTimeout(navigator.storage.estimate(),2000);
     if(est && est.quota && est.quota-(est.usage||0) < need*1.1){ prog.innerHTML=`보관 공간이 부족합니다. 필요 ${(need/1073741824).toFixed(1)}GB, 남은 공간 ${((est.quota-(est.usage||0))/1073741824).toFixed(1)}GB. 폰 저장공간을 비운 뒤 다시 시도하세요.`; return; } }catch(e){}
-  try{ if(navigator.storage.persist) withTimeout(navigator.storage.persist(),1500); }catch(e){}
+  try{ if(navigator.storage.persist) await withTimeout(navigator.storage.persist(),3000); }catch(e){}
   let fail=[];
   for(let k=0;k<list.length;k++){
     const [id,f]=list[k];
@@ -418,6 +448,8 @@ async function saveLater0(list){
     }catch(err){ fail.push(BOOKS[id].short); try{ await d.removeEntry(id+'.pdf'); }catch(e){} }
     renderFiles();
   }
+  setMarker(); try{ localStorage.setItem('dogam_ever','1'); }catch(e){}
+  showGuard();
   prog.innerHTML = fail.length ? `보관 못 한 도감: ${esc(fail.join(', '))} (공간 부족 등). 이 도감은 다음에 다시 골라야 합니다.` : '모두 보관했습니다. 다음부터는 바로 열립니다.';
 }
 function accept(list, forced){
@@ -617,9 +649,10 @@ $('#mic').addEventListener('click',()=>{
 });
 window.__fuzzy=fuzzy;
 
-renderFiles(); search(); loadSaved().then(()=>{ if(!Object.keys(files).length){ $('#prog').textContent='도감 PDF를 한 번 고르면 이 기기에 자동으로 보관되어, 다음부터는 바로 열립니다.'; } });
+renderFiles(); search(); loadSaved().then(()=>{ if(!loadNote && !Object.keys(files).length){ $('#prog').textContent='도감 PDF를 한 번 고르면 이 기기에 자동으로 보관되어, 다음부터는 바로 열립니다.'; } });
 </script>
 </body>
 </html>
 
+<script>if('serviceWorker' in navigator){ window.addEventListener('load',()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); }); }</script>
 </body></html>
