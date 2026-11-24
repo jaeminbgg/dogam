@@ -401,7 +401,16 @@ async function showGuard(){
   const gb=x=>(x/1073741824).toFixed(1);
   g.innerHTML = (p? '<span class="ok">저장 보호: 켜짐</span> — 크롬이 보관한 도감을 임의로 지우지 않습니다.'
     : '<span class="no">저장 보호: 꺼짐</span> — 휴대폰 공간이 부족하면 크롬이 보관한 도감을 지울 수 있습니다. 크롬 ⋮ → <b>앱 설치</b>로 설치한 아이콘으로 열면 켜질 수 있습니다.')
-    + (est&&est.quota? `<br>사용 ${gb(est.usage||0)}GB / 한도 ${gb(est.quota)}GB`:'');
+    + (est&&est.quota? `<br>사용 ${gb(est.usage||0)}GB / 한도 ${gb(est.quota)}GB`:'')
+    + '<br><span id="diag">진단 확인 중…</span>';
+  try{
+    let n=0, sz=0, names=[];
+    const r=await withTimeout(navigator.storage.getDirectory(),5000);
+    if(r){ for await (const [k,h] of r.entries()){ if(h.kind==='directory'){ for await (const [k2,h2] of h.entries()){ n++; try{ const f=await h2.getFile(); sz+=f.size; names.push(k2.replace('.pdf','')); }catch(e){} } } else { n++; names.push(k); } } }
+    const mk=getMarker(); let ever=''; try{ ever=localStorage.getItem('dogam_ever')||''; }catch(e){}
+    const t=mk&&mk.t? new Date(mk.t).toLocaleString('ko-KR'):'없음';
+    document.getElementById('diag').textContent=`진단: 보관 파일 ${n}개(${gb(sz)}GB) · 보관 기록 ${mk&&mk.ids?mk.ids.length:0}권(${t}) · 첫 보관 표시 ${ever?'있음':'없음'} · 앱 ${navigator.serviceWorker&&navigator.serviceWorker.controller?'설치형':'브라우저'}`;
+  }catch(e){ const d=document.getElementById('diag'); if(d) d.textContent='진단 실패: '+(e&&e.message||e); }
 }
 function renderFiles(){
   $('#flist').innerHTML = PBOOKS.map(b=>`<li><span>${esc(b.title)}${files[b.id]?`<br><small style="color:var(--mut)">${esc(files[b.id].name||'')} · ${(files[b.id].size/1048576|0)}MB</small>`:''}</span><span>${files[b.id]?(saved.has(b.id)?'<span class="ok">✓ 보관됨</span>':'<span class="ok">✓ 이번만</span>'):'<span class="no">없음</span>'} <span class="chip" style="position:relative;overflow:hidden;display:inline-block">고르기<input type="file" data-one="${b.id}" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:100px"></span></span></li>`).join('');
